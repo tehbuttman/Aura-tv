@@ -21,9 +21,9 @@ import android.media.session.PlaybackState
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import android.provider.Settings
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
+import android.text.TextUtils
 import android.view.Gravity
 import android.view.View
 import android.widget.FrameLayout
@@ -36,75 +36,68 @@ import java.util.Date
 import java.util.Locale
 
 class AuraNotificationListener : NotificationListenerService() {
-
     companion object {
         @Volatile var connected = false
-        @Volatile var title = ""
-        @Volatile var artist = ""
-        @Volatile var artwork: Bitmap? = null
-        @Volatile var controller: MediaController? = null
-        @Volatile var notificationSeen = false
+        @Volatile var notificationTitle = ""
+        @Volatile var notificationArtist = ""
+        @Volatile var notificationArt: Bitmap? = null
+        @Volatile var notificationController: MediaController? = null
     }
 
     override fun onListenerConnected() {
         super.onListenerConnected()
         connected = true
         try {
-            activeNotifications?.forEach { readSpotify(it) }
+            activeNotifications?.forEach { readNotification(it) }
         } catch (_: Exception) {}
     }
 
     override fun onListenerDisconnected() {
         connected = false
-        controller = null
+        notificationController = null
         super.onListenerDisconnected()
     }
 
     override fun onNotificationPosted(sbn: StatusBarNotification) {
-        readSpotify(sbn)
+        readNotification(sbn)
     }
 
     override fun onNotificationRemoved(sbn: StatusBarNotification) {
         if (sbn.packageName.contains("spotify", true)) {
-            notificationSeen = false
-            title = ""
-            artist = ""
-            artwork = null
-            controller = null
+            notificationTitle = ""
+            notificationArtist = ""
+            notificationArt = null
+            notificationController = null
         }
     }
 
-    private fun readSpotify(sbn: StatusBarNotification) {
+    private fun readNotification(sbn: StatusBarNotification) {
         if (!sbn.packageName.contains("spotify", true)) return
-        notificationSeen = true
 
         try {
             val extras = sbn.notification.extras
-
             val token = extras.getParcelable(
                 Notification.EXTRA_MEDIA_SESSION
             ) as? MediaSession.Token
 
             if (token != null) {
-                controller = MediaController(this, token)
+                notificationController = MediaController(this, token)
             }
 
-            val newTitle = extras.getCharSequence(
-                Notification.EXTRA_TITLE
-            )?.toString().orEmpty()
+            extras.getCharSequence(Notification.EXTRA_TITLE)
+                ?.toString()
+                ?.takeIf { it.isNotBlank() }
+                ?.let { notificationTitle = it }
 
-            val newArtist = extras.getCharSequence(
-                Notification.EXTRA_TEXT
-            )?.toString().orEmpty()
+            extras.getCharSequence(Notification.EXTRA_TEXT)
+                ?.toString()
+                ?.takeIf { it.isNotBlank() }
+                ?.let { notificationArtist = it }
 
-            if (newTitle.isNotBlank()) title = newTitle
-            if (newArtist.isNotBlank()) artist = newArtist
-
-            val newArt = extras.getParcelable(
-                Notification.EXTRA_PICTURE
-            ) as? Bitmap
-
-            if (newArt != null) artwork = newArt
+            notificationArt = (
+                extras.getParcelable(Notification.EXTRA_PICTURE)
+                    as? Bitmap
+                ) ?: notificationArt
 
         } catch (_: Exception) {}
     }
@@ -114,25 +107,34 @@ class MainActivity : Activity() {
 
     private val handler = Handler(Looper.getMainLooper())
 
-    private lateinit var backgroundImage: ImageView
+    private lateinit var backdrop: ImageView
     private lateinit var featuredTitle: TextView
     private lateinit var clock: TextView
+
     private lateinit var spotifyBox: LinearLayout
-    private lateinit var spotifyStatus: TextView
+    private lateinit var spotifyIdle: TextView
     private lateinit var spotifyDetails: LinearLayout
     private lateinit var albumImage: ImageView
     private lateinit var songTitle: TextView
     private lateinit var songArtist: TextView
-    private lateinit var accessButton: TextView
 
-    private fun dp(value: Int): Int =
-        (value * resources.displayMetrics.density).toInt()
+    private var currentController: MediaController? = null
 
-    private fun shape(color: Int, radius: Int = 18) =
-        GradientDrawable().apply {
-            setColor(color)
-            cornerRadius = dp(radius).toFloat()
+    private fun dp(n: Int): Int =
+        (n * resources.displayMetrics.density).toInt()
+
+    private fun shape(
+        color: Int,
+        radius: Int = 18,
+        stroke: Int = Color.TRANSPARENT
+    ) = GradientDrawable().apply {
+        setColor(color)
+        cornerRadius = dp(radius).toFloat()
+
+        if (stroke != Color.TRANSPARENT) {
+            setStroke(dp(2), stroke)
         }
+    }
 
     private fun label(
         value: String,
@@ -142,53 +144,61 @@ class MainActivity : Activity() {
         text = value
         textSize = size
         setTextColor(Color.WHITE)
-        if (bold) typeface = Typeface.DEFAULT_BOLD
+
+        if (bold) {
+            typeface = Typeface.DEFAULT_BOLD
+        }
     }
 
-    private fun bitmapFromDrawable(
+    private fun artworkBitmap(
         drawable: Drawable,
         width: Int,
         height: Int
     ): Bitmap {
-        val bitmap = Bitmap.createBitmap(
-            width, height, Bitmap.Config.ARGB_8888
+        val output = Bitmap.createBitmap(
+            width,
+            height,
+            Bitmap.Config.ARGB_8888
         )
-        val canvas = Canvas(bitmap)
-        val oldBounds = Rect(drawable.bounds)
+
+        val canvas = Canvas(output)
+        val original = Rect(drawable.bounds)
 
         drawable.setBounds(0, 0, width, height)
         drawable.draw(canvas)
-        drawable.bounds = oldBounds
+        drawable.bounds = original
 
-        return bitmap
+        return output
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        buildHome()
+        createHome()
     }
 
-    private fun buildHome() {
-        val frame = FrameLayout(this)
-        frame.setBackgroundColor(Color.rgb(8, 13, 26))
+    private fun createHome() {
 
-        backgroundImage = ImageView(this).apply {
-            scaleType = ImageView.ScaleType.CENTER_CROP
-            alpha = 0.22f
+        val frame = FrameLayout(this).apply {
+            setBackgroundColor(Color.rgb(7, 12, 25))
+        }
+
+        backdrop = ImageView(this).apply {
+            scaleType = ImageView.ScaleType.CENTER_INSIDE
+            alpha = 0f
         }
 
         frame.addView(
-            backgroundImage,
+            backdrop,
             FrameLayout.LayoutParams(-1, -1)
         )
 
         val shade = View(this).apply {
             background = GradientDrawable(
-                GradientDrawable.Orientation.TOP_BOTTOM,
+                GradientDrawable.Orientation.LEFT_RIGHT,
                 intArrayOf(
-                    Color.argb(160, 5, 10, 23),
-                    Color.argb(135, 6, 12, 27),
-                    Color.argb(245, 4, 8, 19)
+                    Color.argb(246, 6, 11, 25),
+                    Color.argb(192, 7, 13, 29),
+                    Color.argb(165, 7, 13, 28)
                 )
             )
         }
@@ -200,7 +210,12 @@ class MainActivity : Activity() {
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(44), dp(22), dp(44), dp(22))
+            setPadding(
+                dp(44),
+                dp(22),
+                dp(44),
+                dp(20)
+            )
             clipChildren = false
             clipToPadding = false
         }
@@ -215,113 +230,104 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER_VERTICAL
         }
 
+        val brand = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+
+        brand.addView(
+            label("AURA", 26f, true).apply {
+                letterSpacing = 0.16f
+            }
+        )
+
+        brand.addView(
+            label(
+                "YOUR SPACE. YOUR ENTERTAINMENT.",
+                9f,
+                true
+            ).apply {
+                alpha = 0.55f
+                letterSpacing = 0.08f
+            }
+        )
+
         header.addView(
-            label("AURA", 26f, true),
+            brand,
             LinearLayout.LayoutParams(0, -2, 1f)
         )
 
         createSpotifyHeader(header)
 
-        clock = label("", 13f, true).apply {
+        clock = label("", 12f, true).apply {
             setPadding(dp(18), 0, 0, 0)
+            alpha = 0.9f
         }
 
         header.addView(clock)
         root.addView(header)
 
-        // MUSIC ACCESS BUTTON
-
-        accessButton = label(
-            "Music Access Settings", 12f, true
-        ).apply {
-            gravity = Gravity.CENTER
-            background = shape(
-                Color.rgb(42, 58, 82), 12
-            )
-            setPadding(
-                dp(12), dp(8), dp(12), dp(8)
-            )
-            isFocusable = true
-            isClickable = true
-            setOnClickListener {
-                openMusicAccessSettings()
-            }
-            setOnFocusChangeListener { view, focused ->
-                view.background = shape(
-                    if (focused)
-                        Color.rgb(65, 106, 158)
-                    else
-                        Color.rgb(42, 58, 82),
-                    12
-                )
-            }
-        }
-
-        val accessRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.END
-            setPadding(0, dp(8), 0, 0)
-        }
-
-        accessRow.addView(accessButton)
-        root.addView(accessRow)
-
-        // FEATURED SECTION
+        // FEATURED AREA
 
         root.addView(
             View(this),
-            LinearLayout.LayoutParams(1, dp(28))
+            LinearLayout.LayoutParams(1, dp(49))
         )
 
         root.addView(
-            label("YOUR ENTERTAINMENT", 12f, true).apply {
-                alpha = 0.75f
+            label("NOW EXPLORING", 11f, true).apply {
+                alpha = 0.68f
+                letterSpacing = 0.15f
             }
         )
 
         featuredTitle = label(
-            "Welcome to Aura", 39f, true
+            "Welcome to Aura",
+            42f,
+            true
         ).apply {
-            setPadding(0, dp(10), 0, 0)
-            maxLines = 2
+            setPadding(0, dp(7), 0, 0)
+            maxLines = 1
+            ellipsize = TextUtils.TruncateAt.END
         }
 
         root.addView(featuredTitle)
 
         root.addView(
             label(
-                "Everything you love, beautifully organized.",
+                "All your favorites, one beautiful place.",
                 15f
             ).apply {
-                alpha = 0.75f
-                setPadding(0, dp(8), 0, 0)
+                alpha = 0.76f
+                setPadding(0, dp(7), 0, 0)
             }
         )
 
         root.addView(
             View(this),
-            LinearLayout.LayoutParams(1, dp(35))
+            LinearLayout.LayoutParams(1, dp(43))
         )
 
-        root.addView(label("Your Apps", 23f, true))
+        root.addView(label("Your Apps", 22f, true))
 
         root.addView(
             View(this),
-            LinearLayout.LayoutParams(1, dp(12))
+            LinearLayout.LayoutParams(1, dp(8))
         )
 
         createAppRow(root)
 
         root.addView(
-            label("AURA TV  •  0.8", 11f).apply {
-                alpha = 0.5f
-                setPadding(0, dp(10), 0, 0)
+            label("AURA TV  •  0.9", 10f).apply {
+                alpha = 0.48f
+                letterSpacing = 0.12f
+                setPadding(0, dp(8), 0, 0)
             }
         )
     }
 
     private fun createAppRow(root: LinearLayout) {
-        val scroller = HorizontalScrollView(this).apply {
+
+        val scroll = HorizontalScrollView(this).apply {
             isHorizontalScrollBarEnabled = false
             clipChildren = false
             clipToPadding = false
@@ -331,7 +337,12 @@ class MainActivity : Activity() {
             orientation = LinearLayout.HORIZONTAL
             clipChildren = false
             clipToPadding = false
-            setPadding(dp(10), dp(12), dp(10), dp(18))
+            setPadding(
+                dp(10),
+                dp(13),
+                dp(10),
+                dp(18)
+            )
         }
 
         val query = Intent(Intent.ACTION_MAIN).apply {
@@ -347,10 +358,12 @@ class MainActivity : Activity() {
             it.activityInfo.packageName
         }.sortedBy {
             it.loadLabel(packageManager)
-                .toString().lowercase()
+                .toString()
+                .lowercase(Locale.getDefault())
         }
 
         for (app in apps) {
+
             val name = app.loadLabel(
                 packageManager
             ).toString()
@@ -359,75 +372,121 @@ class MainActivity : Activity() {
                 .loadBanner(packageManager)
                 ?: app.loadIcon(packageManager)
 
-            // Separate copies protect tile images.
-            val tileBitmap = bitmapFromDrawable(
-                drawable, 320, 180
+            val tileArt = artworkBitmap(
+                drawable,
+                320,
+                180
             )
 
-            val backgroundBitmap = bitmapFromDrawable(
-                drawable, 640, 360
+            val backgroundArt = artworkBitmap(
+                drawable,
+                800,
+                450
             )
 
             val tile = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
                 gravity = Gravity.CENTER
-                setPadding(dp(9), dp(9), dp(9), dp(9))
+                setPadding(
+                    dp(8),
+                    dp(8),
+                    dp(8),
+                    dp(8)
+                )
                 background = shape(
-                    Color.argb(130, 32, 45, 65), 20
+                    Color.argb(190, 27, 40, 65),
+                    18
                 )
                 isFocusable = true
                 isClickable = true
+                elevation = dp(2).toFloat()
             }
 
-            val image = ImageView(this).apply {
-                setImageBitmap(tileBitmap)
+            val art = ImageView(this).apply {
+                setImageBitmap(tileArt)
                 scaleType = ImageView.ScaleType.FIT_CENTER
             }
 
             tile.addView(
-                image,
+                art,
                 LinearLayout.LayoutParams(
-                    dp(163), dp(92)
+                    dp(164),
+                    dp(92)
                 )
             )
 
             tile.addView(
-                label(name, 13f, true).apply {
+                label(name, 12f, true).apply {
                     gravity = Gravity.CENTER
                     maxLines = 1
-                    ellipsize =
-                        android.text.TextUtils.TruncateAt.END
-                    setPadding(0, dp(10), 0, 0)
+                    ellipsize = TextUtils.TruncateAt.END
+                    setPadding(
+                        dp(2),
+                        dp(9),
+                        dp(2),
+                        0
+                    )
                 },
                 LinearLayout.LayoutParams(-1, -2)
             )
 
             tile.setOnFocusChangeListener { view, focused ->
-                view.background = shape(
-                    if (focused)
-                        Color.rgb(60, 102, 151)
-                    else
-                        Color.argb(130, 32, 45, 65),
-                    20
-                )
+
+                view.background = if (focused) {
+                    shape(
+                        Color.argb(245, 43, 73, 117),
+                        18,
+                        Color.rgb(171, 218, 255)
+                    )
+                } else {
+                    shape(
+                        Color.argb(190, 27, 40, 65),
+                        18
+                    )
+                }
+
+                view.animate().cancel()
 
                 view.animate()
-                    .scaleX(if (focused) 1.07f else 1f)
-                    .scaleY(if (focused) 1.07f else 1f)
-                    .setDuration(180)
+                    .scaleX(
+                        if (focused) 1.075f else 1f
+                    )
+                    .scaleY(
+                        if (focused) 1.075f else 1f
+                    )
+                    .translationY(
+                        if (focused)
+                            -dp(5).toFloat()
+                        else
+                            0f
+                    )
+                    .setDuration(210)
                     .start()
 
-                if (focused) {
-                    featuredTitle.text = name
+                view.elevation =
+                    if (focused)
+                        dp(14).toFloat()
+                    else
+                        dp(2).toFloat()
 
-                    backgroundImage.animate().cancel()
-                    backgroundImage.alpha = 0f
-                    backgroundImage.setImageBitmap(
-                        backgroundBitmap
-                    )
-                    backgroundImage.animate()
-                        .alpha(0.22f)
-                        .setDuration(320)
+                if (focused) {
+
+                    featuredTitle.animate().cancel()
+                    featuredTitle.text = name
+                    featuredTitle.alpha = 0.5f
+
+                    featuredTitle.animate()
+                        .alpha(1f)
+                        .setDuration(230)
+                        .start()
+
+                    backdrop.animate().cancel()
+                    backdrop.alpha = 0f
+                    backdrop.setImageBitmap(backgroundArt)
+
+                    backdrop.animate()
+                        .alpha(0.29f)
+                        .setDuration(420)
                         .start()
                 }
             }
@@ -445,9 +504,12 @@ class MainActivity : Activity() {
                     })
                 } catch (_: Exception) {
                     try {
-                        packageManager.getLaunchIntentForPackage(
-                            app.activityInfo.packageName
-                        )?.let { startActivity(it) }
+                        packageManager
+                            .getLaunchIntentForPackage(
+                                app.activityInfo.packageName
+                            )?.let {
+                                startActivity(it)
+                            }
                     } catch (_: Exception) {}
                 }
             }
@@ -455,50 +517,63 @@ class MainActivity : Activity() {
             row.addView(
                 tile,
                 LinearLayout.LayoutParams(
-                    dp(187), dp(150)
+                    dp(184),
+                    dp(146)
                 ).apply {
-                    rightMargin = dp(12)
+                    rightMargin = dp(13)
                 }
             )
         }
 
-        scroller.addView(row)
-        root.addView(scroller)
+        scroll.addView(row)
+        root.addView(scroll)
 
         if (row.childCount > 0) {
             row.getChildAt(0).requestFocus()
         }
     }
 
-    private fun createSpotifyHeader(header: LinearLayout) {
+    private fun createSpotifyHeader(
+        header: LinearLayout
+    ) {
+
         spotifyBox = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             background = shape(
-                Color.rgb(22, 58, 46), 15
+                Color.rgb(18, 66, 52),
+                14
             )
             setPadding(
-                dp(12), dp(8), dp(12), dp(8)
+                dp(11),
+                dp(7),
+                dp(11),
+                dp(7)
             )
             isFocusable = true
             isClickable = true
-            setOnClickListener { openSpotify() }
+            setOnClickListener {
+                openSpotify()
+            }
         }
 
         spotifyBox.setOnFocusChangeListener { view, focused ->
             view.background = shape(
                 if (focused)
-                    Color.rgb(34, 135, 83)
+                    Color.rgb(35, 131, 89)
                 else
-                    Color.rgb(22, 58, 46),
-                15
+                    Color.rgb(18, 66, 52),
+                14
             )
         }
 
-        spotifyStatus = label(
-            "♫ Spotify: Checking", 13f, true
+        spotifyIdle = label(
+            "♫  Spotify",
+            13f,
+            true
         )
-        spotifyBox.addView(spotifyStatus)
+
+        spotifyBox.addView(spotifyIdle)
 
         spotifyDetails = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -509,33 +584,33 @@ class MainActivity : Activity() {
         albumImage = ImageView(this).apply {
             scaleType = ImageView.ScaleType.CENTER_CROP
             background = shape(
-                Color.rgb(36, 76, 59), 6
+                Color.rgb(31, 78, 60),
+                5
             )
         }
 
         spotifyDetails.addView(
             albumImage,
             LinearLayout.LayoutParams(
-                dp(46), dp(46)
+                dp(39),
+                dp(39)
             )
         )
 
         val info = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(10), 0, 0, 0)
+            setPadding(dp(9), 0, 0, 0)
         }
 
-        songTitle = label("", 14f, true).apply {
+        songTitle = label("", 12f, true).apply {
             maxLines = 1
-            ellipsize =
-                android.text.TextUtils.TruncateAt.END
+            ellipsize = TextUtils.TruncateAt.END
         }
 
-        songArtist = label("", 12f).apply {
-            alpha = 0.75f
+        songArtist = label("", 11f).apply {
+            alpha = 0.78f
             maxLines = 1
-            ellipsize =
-                android.text.TextUtils.TruncateAt.END
+            ellipsize = TextUtils.TruncateAt.END
         }
 
         info.addView(songTitle)
@@ -543,93 +618,57 @@ class MainActivity : Activity() {
 
         spotifyDetails.addView(
             info,
-            LinearLayout.LayoutParams(dp(155), -2)
+            LinearLayout.LayoutParams(
+                dp(155),
+                -2
+            )
         )
 
         spotifyBox.addView(spotifyDetails)
         header.addView(spotifyBox)
     }
 
-    private fun openMusicAccessSettings() {
-        val actions = listOf(
-            Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS,
-            Settings.ACTION_SETTINGS
-        )
-
-        for (action in actions) {
-            try {
-                startActivity(Intent(action))
-                return
-            } catch (_: Exception) {}
-        }
-
-        spotifyStatus.text = "♫ Settings unavailable"
-    }
-
-    private fun hasMusicAccess(): Boolean {
-        return try {
-            val enabled = Settings.Secure.getString(
-                contentResolver,
-                "enabled_notification_listeners"
-            ).orEmpty()
-
-            enabled.split(":").any {
-                val component = ComponentName
-                    .unflattenFromString(it)
-
-                component?.packageName == packageName &&
-                    component.className ==
-                        AuraNotificationListener::class.java.name
-            }
-        } catch (_: Exception) {
-            false
-        }
-    }
-
     private fun openSpotify() {
+
         for (pkg in listOf(
             "com.spotify.tv.android",
             "com.spotify.music"
         )) {
-            val launch = packageManager
-                .getLaunchIntentForPackage(pkg)
+            try {
+                val launch = packageManager
+                    .getLaunchIntentForPackage(pkg)
 
-            if (launch != null) {
-                startActivity(launch)
-                return
-            }
+                if (launch != null) {
+                    startActivity(launch)
+                    return
+                }
+            } catch (_: Exception) {}
         }
 
         val query = Intent(Intent.ACTION_MAIN).apply {
             addCategory(Intent.CATEGORY_LEANBACK_LAUNCHER)
         }
 
-        val spotify = packageManager.queryIntentActivities(
-            query, 0
-        ).firstOrNull {
-            it.activityInfo.packageName
-                .contains("spotify", true)
-        }
+        val spotify = packageManager
+            .queryIntentActivities(query, 0)
+            .firstOrNull {
+                it.activityInfo.packageName
+                    .contains("spotify", true)
+            }
 
         if (spotify != null) {
-            startActivity(Intent().apply {
-                component = ComponentName(
-                    spotify.activityInfo.packageName,
-                    spotify.activityInfo.name
-                )
-            })
+            try {
+                startActivity(Intent().apply {
+                    component = ComponentName(
+                        spotify.activityInfo.packageName,
+                        spotify.activityInfo.name
+                    )
+                })
+            } catch (_: Exception) {}
         }
     }
 
     private fun updateSpotify() {
-        val access = hasMusicAccess()
-
-        if (!access) {
-            spotifyStatus.text = "♫ Music access not enabled"
-            spotifyStatus.visibility = View.VISIBLE
-            spotifyDetails.visibility = View.GONE
-            return
-        }
 
         try {
             val manager = getSystemService(
@@ -643,90 +682,74 @@ class MainActivity : Activity() {
 
             val sessions = try {
                 manager.getActiveSessions(listener)
-            } catch (_: SecurityException) {
-                spotifyStatus.text =
-                    "♫ Access granted • Session blocked"
-                spotifyDetails.visibility = View.GONE
-                return
+            } catch (_: Exception) {
+                emptyList<MediaController>()
             }
 
-            val spotifySessions = sessions.filter {
-                it.packageName.contains("spotify", true)
-            }
-
-            val session = spotifySessions.firstOrNull {
+            currentController = sessions.firstOrNull {
+                it.packageName.contains(
+                    "spotify",
+                    true
+                ) &&
                 it.playbackState?.state ==
                     PlaybackState.STATE_PLAYING
-            } ?: spotifySessions.firstOrNull()
-                ?: AuraNotificationListener.controller
+            } ?: sessions.firstOrNull {
+                it.packageName.contains(
+                    "spotify",
+                    true
+                )
+            } ?: AuraNotificationListener
+                .notificationController
 
-            val state = session?.playbackState?.state
-            val metadata = session?.metadata
+            val playing =
+                currentController?.playbackState?.state ==
+                    PlaybackState.STATE_PLAYING
+
+            val metadata = currentController?.metadata
 
             val title = metadata?.getString(
                 MediaMetadata.METADATA_KEY_TITLE
-            )?.takeIf { it.isNotBlank() }
-                ?: AuraNotificationListener.title
+            )?.takeIf {
+                it.isNotBlank()
+            } ?: AuraNotificationListener
+                .notificationTitle
 
             val artist = metadata?.getString(
                 MediaMetadata.METADATA_KEY_ARTIST
-            )?.takeIf { it.isNotBlank() }
-                ?: AuraNotificationListener.artist
+            )?.takeIf {
+                it.isNotBlank()
+            } ?: AuraNotificationListener
+                .notificationArtist
 
             val art = metadata?.getBitmap(
                 MediaMetadata.METADATA_KEY_ALBUM_ART
             ) ?: metadata?.getBitmap(
                 MediaMetadata.METADATA_KEY_ART
-            ) ?: AuraNotificationListener.artwork
+            ) ?: AuraNotificationListener
+                .notificationArt
 
-            val status = when {
-                !AuraNotificationListener.connected ->
-                    "Granted • Listener disconnected"
+            val show = playing && title.isNotBlank()
 
-                session == null &&
-                    AuraNotificationListener.notificationSeen ->
-                    "Notification detected"
-
-                session == null ->
-                    "Granted • No Spotify session"
-
-                state == PlaybackState.STATE_PLAYING &&
-                    title.isBlank() ->
-                    "Playing • No title"
-
-                state == PlaybackState.STATE_PLAYING ->
-                    "Playing"
-
-                state == PlaybackState.STATE_PAUSED ->
-                    "Paused"
-
-                state == null ->
-                    "State unknown"
-
-                else ->
-                    "Playback state $state"
-            }
-
-            spotifyStatus.text = "♫ $status"
-
-            val showDetails =
-                state == PlaybackState.STATE_PLAYING &&
-                title.isNotBlank()
+            spotifyIdle.visibility =
+                if (show)
+                    View.GONE
+                else
+                    View.VISIBLE
 
             spotifyDetails.visibility =
-                if (showDetails) View.VISIBLE else View.GONE
+                if (show)
+                    View.VISIBLE
+                else
+                    View.GONE
 
-            if (showDetails) {
+            if (show) {
                 songTitle.text = title
-                songArtist.text = artist.ifBlank {
-                    "Unknown artist"
-                }
+                songArtist.text = artist
                 albumImage.setImageBitmap(art)
             }
 
-        } catch (e: Exception) {
-            spotifyStatus.text =
-                "♫ Error: ${e.javaClass.simpleName}"
+        } catch (_: Exception) {
+            spotifyIdle.visibility = View.VISIBLE
             spotifyDetails.visibility = View.GONE
         }
     }
