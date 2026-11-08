@@ -34,6 +34,7 @@ import android.widget.HorizontalScrollView
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
+import android.widget.Toast
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
@@ -80,9 +81,10 @@ class AuraNotificationListener : NotificationListenerService() {
 
     private fun readNotification(sbn: StatusBarNotification) {
         if (!sbn.packageName.contains("spotify", true)) return
+
         try {
-            val e = sbn.notification.extras
-            val token = e.getParcelable(
+            val extras = sbn.notification.extras
+            val token = extras.getParcelable(
                 Notification.EXTRA_MEDIA_SESSION
             ) as? MediaSession.Token
 
@@ -90,18 +92,18 @@ class AuraNotificationListener : NotificationListenerService() {
                 notificationController = MediaController(this, token)
             }
 
-            e.getCharSequence(Notification.EXTRA_TITLE)
+            extras.getCharSequence(Notification.EXTRA_TITLE)
                 ?.toString()
                 ?.takeIf { it.isNotBlank() }
                 ?.let { notificationTitle = it }
 
-            e.getCharSequence(Notification.EXTRA_TEXT)
+            extras.getCharSequence(Notification.EXTRA_TEXT)
                 ?.toString()
                 ?.takeIf { it.isNotBlank() }
                 ?.let { notificationArtist = it }
 
             notificationArt =
-                (e.getParcelable(Notification.EXTRA_PICTURE) as? Bitmap)
+                (extras.getParcelable(Notification.EXTRA_PICTURE) as? Bitmap)
                     ?: notificationArt
         } catch (_: Exception) {}
     }
@@ -110,14 +112,15 @@ class AuraNotificationListener : NotificationListenerService() {
 class MainActivity : Activity() {
 
     private val handler = Handler(Looper.getMainLooper())
+
     private val prefs by lazy {
         getSharedPreferences("aura_recent_apps", MODE_PRIVATE)
     }
 
-    private val ink = Color.WHITE
-    private val dim = Color.rgb(174, 193, 215)
+    private val white = Color.WHITE
+    private val muted = Color.rgb(174, 193, 215)
     private val accent = Color.rgb(177, 223, 255)
-    private val cardColor = Color.argb(202, 18, 32, 53)
+    private val panelColor = Color.argb(220, 14, 25, 44)
 
     private lateinit var content: LinearLayout
     private lateinit var backdrop: View
@@ -141,57 +144,73 @@ class MainActivity : Activity() {
     private var selectedPackage = ""
     private var launchedPackage = ""
     private var built = false
+
     private var lastWeather = 0L
     private var weatherLoading = false
 
     private val iconCache = HashMap<String, Bitmap>()
+
     private var lastArt: Bitmap? = null
     private var lastTitle = ""
     private var lastArtist = ""
 
-    private fun dp(n: Int): Int =
-        (n * resources.displayMetrics.density).toInt()
+    private fun dp(value: Int): Int {
+        return (value * resources.displayMetrics.density).toInt()
+    }
 
     private fun shape(
         color: Int,
         radius: Int,
         border: Int = Color.TRANSPARENT
-    ): GradientDrawable = GradientDrawable().apply {
-        setColor(color)
-        cornerRadius = dp(radius).toFloat()
-        if (border != Color.TRANSPARENT) {
-            setStroke(dp(2), border)
+    ): GradientDrawable {
+        return GradientDrawable().apply {
+            setColor(color)
+            cornerRadius = dp(radius).toFloat()
+
+            if (border != Color.TRANSPARENT) {
+                setStroke(dp(2), border)
+            }
         }
     }
 
     private fun label(
-        s: String,
+        value: String,
         size: Float,
         bold: Boolean = false
-    ): TextView = TextView(this).apply {
-        text = s
-        textSize = size
-        setTextColor(ink)
-        includeFontPadding = false
-        if (bold) typeface = Typeface.DEFAULT_BOLD
+    ): TextView {
+        return TextView(this).apply {
+            text = value
+            textSize = size
+            setTextColor(white)
+            includeFontPadding = false
+
+            if (bold) {
+                typeface = Typeface.DEFAULT_BOLD
+            }
+        }
     }
 
     private fun render(
         drawable: Drawable,
-        w: Int,
-        h: Int
+        width: Int,
+        height: Int
     ): Bitmap {
-        val bmp = Bitmap.createBitmap(
-            w, h, Bitmap.Config.ARGB_8888
+        val bitmap = Bitmap.createBitmap(
+            width,
+            height,
+            Bitmap.Config.ARGB_8888
         )
-        val old = Rect(drawable.bounds)
-        drawable.setBounds(0, 0, w, h)
-        drawable.draw(Canvas(bmp))
-        drawable.bounds = old
-        return bmp
+
+        val previousBounds = Rect(drawable.bounds)
+
+        drawable.setBounds(0, 0, width, height)
+        drawable.draw(Canvas(bitmap))
+        drawable.bounds = previousBounds
+
+        return bitmap
     }
 
-    private fun palette(pkg: String): GradientDrawable {
+    private fun palette(packageName: String): GradientDrawable {
         val colors = arrayOf(
             intArrayOf(22, 57, 107),
             intArrayOf(58, 37, 96),
@@ -201,20 +220,20 @@ class MainActivity : Activity() {
         )
 
         val index = (
-            (pkg.hashCode().toLong() and 0x7fffffffL) %
+            (packageName.hashCode().toLong() and 0x7fffffffL) %
                 colors.size
         ).toInt()
 
-        val p = colors[index]
+        val color = colors[index]
 
         return GradientDrawable(
             GradientDrawable.Orientation.TL_BR,
             intArrayOf(
-                Color.rgb(p[0], p[1], p[2]),
+                Color.rgb(color[0], color[1], color[2]),
                 Color.rgb(
-                    p[0] / 2 + 4,
-                    p[1] / 2 + 6,
-                    p[2] / 2 + 12
+                    color[0] / 2 + 4,
+                    color[1] / 2 + 6,
+                    color[2] / 2 + 12
                 ),
                 Color.rgb(4, 8, 19)
             )
@@ -232,31 +251,32 @@ class MainActivity : Activity() {
         buildHome()
     }
 
-    private fun remember(pkg: String) {
+    private fun remember(packageName: String) {
         prefs.edit()
-            .putLong(pkg, System.currentTimeMillis())
+            .putLong(packageName, System.currentTimeMillis())
             .apply()
     }
 
-    private fun hiddenApps(): Set<String> =
-        prefs.getStringSet(
+    private fun hiddenApps(): Set<String> {
+        return prefs.getStringSet(
             "aura_hidden_apps",
             emptySet()
         )?.toSet() ?: emptySet()
+    }
 
-    private fun hideApp(pkg: String, name: String) {
+    private fun hideApp(packageName: String, name: String) {
         AlertDialog.Builder(this)
             .setTitle("Hide $name?")
             .setMessage(
                 "This removes the app from Aura TV, " +
-                "but does not uninstall it."
+                    "but does not uninstall it."
             )
             .setNegativeButton("Cancel", null)
             .setPositiveButton("Hide") { _, _ ->
                 prefs.edit()
                     .putStringSet(
                         "aura_hidden_apps",
-                        hiddenApps() + pkg
+                        hiddenApps() + packageName
                     )
                     .apply()
 
@@ -288,6 +308,7 @@ class MainActivity : Activity() {
                 .setMessage("No hidden apps to restore.")
                 .setPositiveButton("OK", null)
                 .show()
+
             return
         }
 
@@ -298,13 +319,13 @@ class MainActivity : Activity() {
         AlertDialog.Builder(this)
             .setTitle("Restore an app")
             .setItems(names) { _, index ->
-                val pkg =
+                val packageName =
                     available[index].activityInfo.packageName
 
                 prefs.edit()
                     .putStringSet(
                         "aura_hidden_apps",
-                        hiddenApps() - pkg
+                        hiddenApps() - packageName
                     )
                     .apply()
 
@@ -315,9 +336,9 @@ class MainActivity : Activity() {
             .show()
     }
 
-    @Deprecated("Aura TV stays open when Back is pressed")
+    @Deprecated("Keep Aura TV open")
     override fun onBackPressed() {
-        // Stay on the Aura TV home screen.
+        // Back does not close the launcher.
     }
 
     private fun apps(): List<ResolveInfo> {
@@ -365,25 +386,32 @@ class MainActivity : Activity() {
             FrameLayout.LayoutParams(-1, -1)
         )
 
-        root.addView(
-            View(this).apply {
-                background = GradientDrawable(
-                    GradientDrawable.Orientation.TOP_BOTTOM,
-                    intArrayOf(
-                        Color.argb(28, 0, 0, 0),
-                        Color.TRANSPARENT,
-                        Color.argb(145, 0, 0, 0)
-                    )
+        val overlay = View(this).apply {
+            background = GradientDrawable(
+                GradientDrawable.Orientation.TOP_BOTTOM,
+                intArrayOf(
+                    Color.argb(28, 0, 0, 0),
+                    Color.TRANSPARENT,
+                    Color.argb(145, 0, 0, 0)
                 )
-            },
+            )
+        }
+
+        root.addView(
+            overlay,
             FrameLayout.LayoutParams(-1, -1)
         )
 
         content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
+
             setPadding(
-                dp(42), dp(24), dp(42), dp(12)
+                dp(46),
+                dp(18),
+                dp(46),
+                dp(12)
             )
+
             clipChildren = false
             clipToPadding = false
         }
@@ -394,16 +422,17 @@ class MainActivity : Activity() {
         )
 
         setContentView(root)
-        header()
+
+        createHeader()
 
         content.addView(
             View(this),
-            LinearLayout.LayoutParams(1, dp(43))
+            LinearLayout.LayoutParams(1, dp(27))
         )
 
         feature = label(
-            "Welcome to Aura",
-            39f,
+            "Your entertainment",
+            34f,
             true
         ).apply {
             maxLines = 1
@@ -413,10 +442,10 @@ class MainActivity : Activity() {
         content.addView(feature)
 
         subtitle = label(
-            "Everything you love, all in one place",
+            "Pick up where you left off",
             13f
         ).apply {
-            setTextColor(dim)
+            setTextColor(muted)
             setPadding(0, dp(9), 0, 0)
         }
 
@@ -424,7 +453,7 @@ class MainActivity : Activity() {
 
         content.addView(
             View(this),
-            LinearLayout.LayoutParams(1, dp(30))
+            LinearLayout.LayoutParams(1, dp(23))
         )
 
         val heading = LinearLayout(this).apply {
@@ -432,7 +461,10 @@ class MainActivity : Activity() {
         }
 
         heading.addView(
-            label("Your Apps", 20f, true),
+            label("APPS", 14f, true).apply {
+                letterSpacing = 0.18f
+                setTextColor(muted)
+            },
             LinearLayout.LayoutParams(0, -2, 1f)
         )
 
@@ -441,11 +473,17 @@ class MainActivity : Activity() {
             10f,
             true
         ).apply {
-            setTextColor(dim)
+            setTextColor(muted)
+
             setPadding(
-                dp(12), dp(9), dp(12), dp(9)
+                dp(12),
+                dp(9),
+                dp(12),
+                dp(9)
             )
-            background = shape(cardColor, 12)
+
+            background = shape(panelColor, 12)
+
             isFocusable = true
             isClickable = true
 
@@ -453,12 +491,12 @@ class MainActivity : Activity() {
                 restoreApps()
             }
 
-            setOnFocusChangeListener { v, focused ->
-                v.background = shape(
+            setOnFocusChangeListener { view, focused ->
+                view.background = shape(
                     if (focused)
                         Color.rgb(40, 66, 98)
                     else
-                        cardColor,
+                        panelColor,
                     12,
                     if (focused)
                         accent
@@ -476,7 +514,7 @@ class MainActivity : Activity() {
             LinearLayout.LayoutParams(1, dp(7))
         )
 
-        appGrid()
+        createAppGrid()
 
         val footer = LinearLayout(this).apply {
             gravity = Gravity.CENTER_VERTICAL
@@ -484,14 +522,14 @@ class MainActivity : Activity() {
 
         footer.addView(
             label("AURA TV", 10f, true).apply {
-                setTextColor(dim)
+                setTextColor(muted)
                 letterSpacing = 0.12f
             },
             LinearLayout.LayoutParams(0, -2, 1f)
         )
 
         footer.addView(
-            label("1.6", 10f, true).apply {
+            label("1.7", 10f, true).apply {
                 setTextColor(accent)
             }
         )
@@ -502,7 +540,7 @@ class MainActivity : Activity() {
         refreshWeather()
     }
 
-    private fun header() {
+    private fun createHeader() {
         val bar = LinearLayout(this).apply {
             gravity = Gravity.CENTER_VERTICAL
         }
@@ -512,14 +550,18 @@ class MainActivity : Activity() {
             LinearLayout.LayoutParams(0, 1, 1f)
         )
 
-        spotify(bar)
+        createSpotify(bar)
 
         val weather = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_VERTICAL
-            background = shape(cardColor, 14)
+            background = shape(panelColor, 14)
+
             setPadding(
-                dp(14), dp(9), dp(14), dp(9)
+                dp(14),
+                dp(9),
+                dp(14),
+                dp(9)
             )
         }
 
@@ -529,7 +571,7 @@ class MainActivity : Activity() {
             "Bridgeville · Loading",
             10f
         ).apply {
-            setTextColor(dim)
+            setTextColor(muted)
         }
 
         weather.addView(weatherTemp)
@@ -550,17 +592,17 @@ class MainActivity : Activity() {
 
         val settings = label("⚙", 22f, true).apply {
             gravity = Gravity.CENTER
-            background = shape(cardColor, 14)
+            background = shape(panelColor, 14)
             isFocusable = true
             isClickable = true
         }
 
-        settings.setOnFocusChangeListener { v, focused ->
-            v.background = shape(
+        settings.setOnFocusChangeListener { view, focused ->
+            view.background = shape(
                 if (focused)
                     Color.rgb(40, 66, 98)
                 else
-                    cardColor,
+                    panelColor,
                 14,
                 if (focused)
                     accent
@@ -586,7 +628,8 @@ class MainActivity : Activity() {
         bar.addView(
             settings,
             LinearLayout.LayoutParams(
-                dp(48), dp(45)
+                dp(48),
+                dp(45)
             ).apply {
                 leftMargin = dp(12)
             }
@@ -595,14 +638,19 @@ class MainActivity : Activity() {
         content.addView(bar)
     }
 
-    private fun spotify(bar: LinearLayout) {
+    private fun createSpotify(bar: LinearLayout) {
         musicPanel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_VERTICAL
-            background = shape(cardColor, 16)
+            background = shape(panelColor, 16)
+
             setPadding(
-                dp(12), dp(8), dp(12), dp(8)
+                dp(12),
+                dp(8),
+                dp(12),
+                dp(8)
             )
+
             isFocusable = true
             isClickable = true
         }
@@ -611,7 +659,14 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER_VERTICAL
         }
 
-        musicIdle = label("♫  Spotify", 13f, true)
+        musicIdle = label(
+            "♫  SPOTIFY · Press OK to open",
+            12f,
+            true
+        ).apply {
+            setTextColor(Color.rgb(169, 239, 195))
+        }
+
         top.addView(musicIdle)
 
         musicDetails = LinearLayout(this).apply {
@@ -621,6 +676,7 @@ class MainActivity : Activity() {
 
         musicArt = ImageView(this).apply {
             scaleType = ImageView.ScaleType.CENTER_CROP
+
             background = shape(
                 Color.rgb(29, 57, 70),
                 7
@@ -630,7 +686,8 @@ class MainActivity : Activity() {
         musicDetails.addView(
             musicArt,
             LinearLayout.LayoutParams(
-                dp(49), dp(49)
+                dp(49),
+                dp(49)
             )
         )
 
@@ -657,7 +714,7 @@ class MainActivity : Activity() {
         musicArtist = label("", 10f).apply {
             maxLines = 1
             ellipsize = TextUtils.TruncateAt.END
-            setTextColor(dim)
+            setTextColor(muted)
             setPadding(0, dp(3), 0, 0)
         }
 
@@ -674,20 +731,23 @@ class MainActivity : Activity() {
 
         musicControls = LinearLayout(this).apply {
             gravity = Gravity.CENTER
-            visibility = View.GONE
+            visibility = View.VISIBLE
             setPadding(0, dp(9), 0, 0)
         }
 
-        val prev = control("⏮") {
+        val previous = createControl("⏮") {
             transport {
                 skipToPrevious()
             }
         }
 
-        playButton = control("⏯") {
+        playButton = createControl("⏯") {
+            val active = controller
+                ?: AuraNotificationListener.notificationController
+
             transport {
                 if (
-                    controller?.playbackState?.state ==
+                    active?.playbackState?.state ==
                     PlaybackState.STATE_PLAYING
                 ) {
                     pause()
@@ -697,18 +757,19 @@ class MainActivity : Activity() {
             }
         }
 
-        val next = control("⏭") {
+        val next = createControl("⏭") {
             transport {
                 skipToNext()
             }
         }
 
-        musicControls.addView(prev)
+        musicControls.addView(previous)
 
         musicControls.addView(
             playButton,
             LinearLayout.LayoutParams(
-                dp(49), dp(36)
+                dp(49),
+                dp(36)
             ).apply {
                 leftMargin = dp(8)
                 rightMargin = dp(8)
@@ -719,18 +780,18 @@ class MainActivity : Activity() {
         musicPanel.addView(musicControls)
 
         musicStatus = label("", 9f).apply {
-            setTextColor(dim)
+            setTextColor(muted)
             visibility = View.GONE
         }
 
         musicPanel.addView(musicStatus)
 
-        musicPanel.setOnFocusChangeListener { v, focused ->
-            v.background = shape(
+        musicPanel.setOnFocusChangeListener { view, focused ->
+            view.background = shape(
                 if (focused)
                     Color.rgb(35, 58, 87)
                 else
-                    cardColor,
+                    panelColor,
                 16,
                 if (focused)
                     accent
@@ -738,15 +799,7 @@ class MainActivity : Activity() {
                     Color.TRANSPARENT
             )
 
-            if (focused) {
-                musicControls.visibility = View.VISIBLE
-            } else {
-                v.post {
-                    if (!musicControls.hasFocus()) {
-                        musicControls.visibility = View.GONE
-                    }
-                }
-            }
+            musicControls.visibility = View.VISIBLE
 
             musicStatus.visibility =
                 if (
@@ -760,8 +813,9 @@ class MainActivity : Activity() {
 
             musicStatus.text = "Music access unavailable"
 
-            v.animate().cancel()
-            v.animate()
+            view.animate().cancel()
+
+            view.animate()
                 .scaleX(if (focused) 1.025f else 1f)
                 .scaleY(if (focused) 1.025f else 1f)
                 .setDuration(180)
@@ -769,7 +823,7 @@ class MainActivity : Activity() {
         }
 
         musicPanel.setOnClickListener {
-            playButton.requestFocus()
+            openSpotify()
         }
 
         musicPanel.setOnKeyListener { _, keyCode, event ->
@@ -786,47 +840,95 @@ class MainActivity : Activity() {
             }
         }
 
-        bar.addView(musicPanel)
+        bar.addView(
+            musicPanel,
+            LinearLayout.LayoutParams(dp(292), -2)
+        )
     }
 
-    private fun control(
+    private fun openSpotify() {
+        try {
+            val launch =
+                packageManager.getLaunchIntentForPackage(
+                    "com.spotify.tv.android"
+                ) ?: packageManager.getLaunchIntentForPackage(
+                    "com.spotify.music"
+                )
+
+            if (launch != null) {
+                launchedPackage = "spotify"
+                startActivity(launch)
+            } else {
+                Toast.makeText(
+                    this,
+                    "Spotify app not found",
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+        } catch (_: Exception) {
+            Toast.makeText(
+                this,
+                "Could not open Spotify",
+                Toast.LENGTH_SHORT
+            ).show()
+        }
+    }
+
+    private fun createControl(
         symbol: String,
         action: () -> Unit
-    ): TextView = label(symbol, 22f, true).apply {
-        gravity = Gravity.CENTER
-        isFocusable = true
-        isClickable = true
+    ): TextView {
+        return label(symbol, 22f, true).apply {
+            gravity = Gravity.CENTER
+            isFocusable = true
+            isClickable = true
 
-        background = shape(
-            Color.argb(110, 67, 98, 126),
-            10
-        )
-
-        setOnFocusChangeListener { v, focused ->
-            v.background = shape(
-                if (focused)
-                    Color.rgb(72, 115, 153)
-                else
-                    Color.argb(110, 67, 98, 126),
-                10,
-                if (focused)
-                    accent
-                else
-                    Color.TRANSPARENT
+            background = shape(
+                Color.argb(110, 67, 98, 126),
+                10
             )
 
-            if (focused) {
-                musicControls.visibility = View.VISIBLE
+            setOnFocusChangeListener { view, focused ->
+                view.background = shape(
+                    if (focused)
+                        Color.rgb(72, 115, 153)
+                    else
+                        Color.argb(110, 67, 98, 126),
+                    10,
+                    if (focused)
+                        accent
+                    else
+                        Color.TRANSPARENT
+                )
+
+                if (focused) {
+                    musicControls.visibility = View.VISIBLE
+                }
             }
-        }
 
-        setOnClickListener {
-            action()
-        }
+            setOnClickListener {
+                action()
+            }
 
-        layoutParams = LinearLayout.LayoutParams(
-            dp(43), dp(36)
-        )
+            setOnKeyListener { _, keyCode, event ->
+                if (
+                    event.action ==
+                        android.view.KeyEvent.ACTION_DOWN &&
+                    keyCode ==
+                        android.view.KeyEvent.KEYCODE_BACK
+                ) {
+                    musicPanel.requestFocus()
+                    true
+                } else {
+                    false
+                }
+            }
+
+            layoutParams = LinearLayout.LayoutParams(
+                dp(43),
+                dp(36)
+            )
+        }
     }
 
     private fun transport(
@@ -834,14 +936,23 @@ class MainActivity : Activity() {
             MediaController.TransportControls.() -> Unit
     ) {
         try {
-            val c = controller
+            val active = controller
                 ?: AuraNotificationListener.notificationController
 
-            c?.transportControls?.action()
+            if (active == null) {
+                Toast.makeText(
+                    this,
+                    "Start playing Spotify first",
+                    Toast.LENGTH_SHORT
+                ).show()
+                return
+            }
+
+            active.transportControls.action()
         } catch (_: Exception) {}
     }
 
-    private fun appGrid() {
+    private fun createAppGrid() {
         val scroll = HorizontalScrollView(this).apply {
             isHorizontalScrollBarEnabled = false
             clipChildren = false
@@ -853,15 +964,22 @@ class MainActivity : Activity() {
             orientation = LinearLayout.HORIZONTAL
             clipChildren = false
             clipToPadding = false
+
             setPadding(
-                dp(12), dp(13), dp(12), dp(13)
+                dp(12),
+                dp(13),
+                dp(12),
+                dp(13)
             )
         }
 
-        val list = apps()
+        val availableApps = apps()
         var first: View? = null
 
-        for (colIndex in 0 until (list.size + 1) / 2) {
+        for (
+            columnIndex in
+            0 until (availableApps.size + 1) / 2
+        ) {
             val column = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
                 clipChildren = false
@@ -869,17 +987,20 @@ class MainActivity : Activity() {
             }
 
             for (rowIndex in 0..1) {
-                val index = colIndex * 2 + rowIndex
-                if (index >= list.size) continue
+                val index = columnIndex * 2 + rowIndex
 
-                val app = list[index]
-                val pkg = app.activityInfo.packageName
+                if (index >= availableApps.size) {
+                    continue
+                }
+
+                val app = availableApps[index]
+                val appPackage = app.activityInfo.packageName
                 val name = app.loadLabel(
                     packageManager
                 ).toString()
 
                 val drawable =
-                    if (iconCache.containsKey(pkg)) {
+                    if (iconCache.containsKey(appPackage)) {
                         null
                     } else {
                         app.activityInfo.loadBanner(
@@ -890,49 +1011,68 @@ class MainActivity : Activity() {
                 val tile = LinearLayout(this).apply {
                     orientation = LinearLayout.VERTICAL
                     gravity = Gravity.CENTER
+
                     setPadding(
-                        dp(9), dp(8), dp(9), dp(9)
+                        dp(9),
+                        dp(8),
+                        dp(9),
+                        dp(9)
                     )
-                    background = shape(cardColor, 18)
+
+                    background = shape(panelColor, 18)
                     isFocusable = true
                     isClickable = true
                     elevation = dp(2).toFloat()
                 }
 
+                val artwork = ImageView(this).apply {
+                    setImageBitmap(
+                        iconCache.getOrPut(appPackage) {
+                            render(drawable!!, 240, 135)
+                        }
+                    )
+
+                    scaleType =
+                        ImageView.ScaleType.FIT_CENTER
+                }
+
                 tile.addView(
-                    ImageView(this).apply {
-                        setImageBitmap(
-                            iconCache.getOrPut(pkg) {
-                                render(drawable!!, 240, 135)
-                            }
-                        )
-                        scaleType =
-                            ImageView.ScaleType.FIT_CENTER
-                    },
+                    artwork,
                     LinearLayout.LayoutParams(
-                        dp(145), dp(74)
+                        dp(160),
+                        dp(85)
                     )
                 )
 
+                val appName = label(
+                    name,
+                    11f,
+                    true
+                ).apply {
+                    gravity = Gravity.CENTER
+                    maxLines = 1
+                    ellipsize =
+                        TextUtils.TruncateAt.END
+
+                    setPadding(
+                        dp(3),
+                        dp(8),
+                        dp(3),
+                        0
+                    )
+                }
+
                 tile.addView(
-                    label(name, 11f, true).apply {
-                        gravity = Gravity.CENTER
-                        maxLines = 1
-                        ellipsize =
-                            TextUtils.TruncateAt.END
-                        setPadding(
-                            dp(3), dp(8), dp(3), 0
-                        )
-                    },
+                    appName,
                     LinearLayout.LayoutParams(-1, -2)
                 )
 
-                tile.setOnFocusChangeListener { v, focused ->
-                    v.background = shape(
+                tile.setOnFocusChangeListener { view, focused ->
+                    view.background = shape(
                         if (focused)
                             Color.argb(245, 38, 66, 100)
                         else
-                            cardColor,
+                            panelColor,
                         18,
                         if (focused)
                             accent
@@ -940,9 +1080,9 @@ class MainActivity : Activity() {
                             Color.TRANSPARENT
                     )
 
-                    v.animate().cancel()
+                    view.animate().cancel()
 
-                    v.animate()
+                    view.animate()
                         .scaleX(
                             if (focused) 1.065f else 1f
                         )
@@ -958,38 +1098,41 @@ class MainActivity : Activity() {
                         .setDuration(120)
                         .start()
 
-                    v.elevation = dp(
+                    view.elevation = dp(
                         if (focused) 5 else 1
                     ).toFloat()
 
                     if (
                         focused &&
-                        selectedPackage != pkg
+                        selectedPackage != appPackage
                     ) {
-                        selectedPackage = pkg
+                        selectedPackage = appPackage
                         feature.text = name
                         subtitle.text =
                             "Press OK to open $name"
-                        backdrop.background = palette(pkg)
+
+                        backdrop.background =
+                            palette(appPackage)
                     }
                 }
 
                 tile.setOnLongClickListener {
-                    hideApp(pkg, name)
+                    hideApp(appPackage, name)
                     true
                 }
 
                 tile.setOnClickListener {
-                    remember(pkg)
-                    launchedPackage = pkg
+                    remember(appPackage)
+                    launchedPackage = appPackage
 
                     try {
                         startActivity(
                             Intent().apply {
                                 component = ComponentName(
-                                    pkg,
+                                    appPackage,
                                     app.activityInfo.name
                                 )
+
                                 addFlags(
                                     Intent.FLAG_ACTIVITY_NEW_TASK
                                 )
@@ -998,7 +1141,9 @@ class MainActivity : Activity() {
                     } catch (_: Exception) {
                         try {
                             packageManager
-                                .getLaunchIntentForPackage(pkg)
+                                .getLaunchIntentForPackage(
+                                    appPackage
+                                )
                                 ?.let {
                                     startActivity(it)
                                 }
@@ -1009,7 +1154,8 @@ class MainActivity : Activity() {
                 column.addView(
                     tile,
                     LinearLayout.LayoutParams(
-                        dp(165), dp(118)
+                        dp(183),
+                        dp(135)
                     ).apply {
                         bottomMargin = dp(13)
                     }
@@ -1023,7 +1169,8 @@ class MainActivity : Activity() {
             columns.addView(
                 column,
                 LinearLayout.LayoutParams(
-                    dp(165), -2
+                    dp(183),
+                    -2
                 ).apply {
                     rightMargin = dp(14)
                 }
@@ -1035,7 +1182,8 @@ class MainActivity : Activity() {
         content.addView(
             scroll,
             LinearLayout.LayoutParams(
-                -1, dp(283)
+                -1,
+                dp(311)
             )
         )
 
@@ -1103,10 +1251,16 @@ class MainActivity : Activity() {
                     )
 
             musicIdle.visibility =
-                if (show) View.GONE else View.VISIBLE
+                if (show)
+                    View.GONE
+                else
+                    View.VISIBLE
 
             musicDetails.visibility =
-                if (show) View.VISIBLE else View.GONE
+                if (show)
+                    View.VISIBLE
+                else
+                    View.GONE
 
             if (show) {
                 if (title != lastTitle) {
@@ -1132,16 +1286,18 @@ class MainActivity : Activity() {
 
     private fun weatherDescription(
         code: Int
-    ): Pair<String, String> = when (code) {
-        0 -> "☀" to "Clear"
-        1, 2 -> "⛅" to "Partly cloudy"
-        3 -> "☁" to "Cloudy"
-        45, 48 -> "☁" to "Fog"
-        in 51..57 -> "☂" to "Drizzle"
-        in 61..67, in 80..82 -> "☂" to "Rain"
-        in 71..77, 85, 86 -> "❄" to "Snow"
-        in 95..99 -> "⚡" to "Thunderstorms"
-        else -> "☁" to "Weather"
+    ): Pair<String, String> {
+        return when (code) {
+            0 -> "☀" to "Clear"
+            1, 2 -> "⛅" to "Partly cloudy"
+            3 -> "☁" to "Cloudy"
+            45, 48 -> "☁" to "Fog"
+            in 51..57 -> "☂" to "Drizzle"
+            in 61..67, in 80..82 -> "☂" to "Rain"
+            in 71..77, 85, 86 -> "❄" to "Snow"
+            in 95..99 -> "⚡" to "Thunderstorms"
+            else -> "☁" to "Weather"
+        }
     }
 
     private fun refreshWeather() {
@@ -1150,24 +1306,26 @@ class MainActivity : Activity() {
         if (
             weatherLoading ||
             now - lastWeather < 15 * 60 * 1000L
-        ) return
+        ) {
+            return
+        }
 
         weatherLoading = true
 
         thread(name = "aura-weather") {
-            var conn: HttpURLConnection? = null
+            var connection: HttpURLConnection? = null
 
             try {
                 val url = URL(
                     "https://api.open-meteo.com/v1/forecast" +
-                    "?latitude=40.3562" +
-                    "&longitude=-80.1101" +
-                    "&current=temperature_2m,weather_code" +
-                    "&temperature_unit=fahrenheit" +
-                    "&timezone=America%2FNew_York"
+                        "?latitude=40.3562" +
+                        "&longitude=-80.1101" +
+                        "&current=temperature_2m,weather_code" +
+                        "&temperature_unit=fahrenheit" +
+                        "&timezone=America%2FNew_York"
                 )
 
-                conn = (
+                connection = (
                     url.openConnection() as HttpURLConnection
                 ).apply {
                     connectTimeout = 7000
@@ -1176,31 +1334,35 @@ class MainActivity : Activity() {
                 }
 
                 val json = JSONObject(
-                    conn.inputStream.bufferedReader().use {
-                        it.readText()
-                    }
+                    connection.inputStream
+                        .bufferedReader()
+                        .use { it.readText() }
                 )
 
-                val current = json.getJSONObject("current")
+                val current =
+                    json.getJSONObject("current")
 
-                val temp = current.getDouble(
+                val temperature = current.getDouble(
                     "temperature_2m"
                 ).toInt()
 
-                val (icon, condition) =
+                val (symbol, condition) =
                     weatherDescription(
                         current.getInt("weather_code")
                     )
 
                 handler.post {
                     if (!isFinishing && !isDestroyed) {
-                        weatherTemp.text = "$icon  $temp°F"
+                        weatherTemp.text =
+                            "$symbol  $temperature°F"
+
                         weatherDetail.text =
                             "Bridgeville · $condition"
                     }
                 }
 
-                lastWeather = System.currentTimeMillis()
+                lastWeather =
+                    System.currentTimeMillis()
 
             } catch (_: Exception) {
                 lastWeather =
@@ -1214,7 +1376,7 @@ class MainActivity : Activity() {
                     }
                 }
             } finally {
-                conn?.disconnect()
+                connection?.disconnect()
                 weatherLoading = false
             }
         }
