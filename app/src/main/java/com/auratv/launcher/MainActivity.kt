@@ -26,7 +26,6 @@ import android.service.notification.StatusBarNotification
 import android.text.TextUtils
 import android.view.Gravity
 import android.view.View
-import android.view.ViewGroup
 import android.widget.FrameLayout
 import android.widget.HorizontalScrollView
 import android.widget.ImageView
@@ -108,7 +107,6 @@ class MainActivity : Activity() {
         getSharedPreferences("aura_recent_apps", MODE_PRIVATE)
     }
 
-    private lateinit var rootFrame: FrameLayout
     private lateinit var mainContent: LinearLayout
     private lateinit var backgroundLayer: View
     private lateinit var featuredTitle: TextView
@@ -247,7 +245,7 @@ class MainActivity : Activity() {
     private fun createHome() {
         homeBuilt = false
 
-        rootFrame = FrameLayout(this).apply {
+        val rootFrame = FrameLayout(this).apply {
             setBackgroundColor(Color.rgb(5, 9, 19))
         }
 
@@ -367,7 +365,7 @@ class MainActivity : Activity() {
         )
 
         footer.addView(
-            text("1.1", 10f, true).apply {
+            text("1.2", 10f, true).apply {
                 alpha = 0.6f
             }
         )
@@ -413,6 +411,61 @@ class MainActivity : Activity() {
         }
 
         header.addView(clock)
+
+        // SETTINGS BUTTON
+        val settingsButton = text("⚙  Settings", 12f, true).apply {
+            gravity = Gravity.CENTER
+            setPadding(dp(14), dp(12), dp(14), dp(12))
+            background = rounded(
+                Color.argb(205, 22, 41, 56),
+                14
+            )
+            isFocusable = true
+            isClickable = true
+        }
+
+        settingsButton.setOnFocusChangeListener { view, focused ->
+            view.background = rounded(
+                if (focused)
+                    Color.argb(240, 43, 65, 96)
+                else
+                    Color.argb(205, 22, 41, 56),
+                14,
+                if (focused)
+                    Color.rgb(207, 237, 255)
+                else
+                    Color.TRANSPARENT
+            )
+
+            view.animate().cancel()
+            view.animate()
+                .scaleX(if (focused) 1.06f else 1f)
+                .scaleY(if (focused) 1.06f else 1f)
+                .setDuration(180)
+                .start()
+        }
+
+        settingsButton.setOnClickListener {
+            try {
+                startActivity(
+                    Intent("android.settings.SETTINGS")
+                )
+            } catch (_: Exception) {
+                try {
+                    startActivity(
+                        Intent("android.settings.DEVICE_INFO_SETTINGS")
+                    )
+                } catch (_: Exception) {}
+            }
+        }
+
+        header.addView(
+            settingsButton,
+            LinearLayout.LayoutParams(-2, -2).apply {
+                leftMargin = dp(16)
+            }
+        )
+
         mainContent.addView(header)
     }
 
@@ -726,7 +779,6 @@ class MainActivity : Activity() {
         }
     }
 
-    // Preserve working Spotify playback detection.
     private fun updateSpotify() {
         try {
             val manager = getSystemService(
