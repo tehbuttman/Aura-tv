@@ -1,4 +1,3 @@
-
 package com.auratv.launcher
 
 import android.app.Activity
@@ -42,7 +41,7 @@ class AuraNotificationListener : NotificationListenerService() {
         @Volatile var title = ""
         @Volatile var artist = ""
         @Volatile var artwork: Bitmap? = null
-        @Volatile var mediaController: MediaController? = null
+        @Volatile var controller: MediaController? = null
         @Volatile var notificationSeen = false
     }
 
@@ -56,7 +55,7 @@ class AuraNotificationListener : NotificationListenerService() {
 
     override fun onListenerDisconnected() {
         connected = false
-        mediaController = null
+        controller = null
         super.onListenerDisconnected()
     }
 
@@ -70,13 +69,12 @@ class AuraNotificationListener : NotificationListenerService() {
             title = ""
             artist = ""
             artwork = null
-            mediaController = null
+            controller = null
         }
     }
 
     private fun readSpotify(sbn: StatusBarNotification) {
         if (!sbn.packageName.contains("spotify", true)) return
-
         notificationSeen = true
 
         try {
@@ -87,7 +85,7 @@ class AuraNotificationListener : NotificationListenerService() {
             ) as? MediaSession.Token
 
             if (token != null) {
-                mediaController = MediaController(this, token)
+                controller = MediaController(this, token)
             }
 
             val newTitle = extras.getCharSequence(
@@ -101,11 +99,11 @@ class AuraNotificationListener : NotificationListenerService() {
             if (newTitle.isNotBlank()) title = newTitle
             if (newArtist.isNotBlank()) artist = newArtist
 
-            val art = extras.getParcelable(
+            val newArt = extras.getParcelable(
                 Notification.EXTRA_PICTURE
             ) as? Bitmap
 
-            if (art != null) artwork = art
+            if (newArt != null) artwork = newArt
 
         } catch (_: Exception) {}
     }
@@ -118,16 +116,16 @@ class MainActivity : Activity() {
     private lateinit var backgroundImage: ImageView
     private lateinit var featuredTitle: TextView
     private lateinit var clock: TextView
-
     private lateinit var spotifyBox: LinearLayout
     private lateinit var spotifyStatus: TextView
     private lateinit var spotifyDetails: LinearLayout
     private lateinit var albumImage: ImageView
     private lateinit var songTitle: TextView
     private lateinit var songArtist: TextView
+    private lateinit var accessButton: TextView
 
-    private fun dp(n: Int): Int =
-        (n * resources.displayMetrics.density).toInt()
+    private fun dp(value: Int): Int =
+        (value * resources.displayMetrics.density).toInt()
 
     private fun shape(color: Int, radius: Int = 18) =
         GradientDrawable().apply {
@@ -155,10 +153,12 @@ class MainActivity : Activity() {
             width, height, Bitmap.Config.ARGB_8888
         )
         val canvas = Canvas(bitmap)
-        val previousBounds = Rect(drawable.bounds)
+        val oldBounds = Rect(drawable.bounds)
+
         drawable.setBounds(0, 0, width, height)
         drawable.draw(canvas)
-        drawable.bounds = previousBounds
+        drawable.bounds = oldBounds
+
         return bitmap
     }
 
@@ -207,6 +207,8 @@ class MainActivity : Activity() {
         frame.addView(root)
         setContentView(frame)
 
+        // HEADER
+
         val header = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -226,9 +228,48 @@ class MainActivity : Activity() {
         header.addView(clock)
         root.addView(header)
 
+        // MUSIC ACCESS BUTTON
+
+        accessButton = label(
+            "Music Access Settings", 12f, true
+        ).apply {
+            gravity = Gravity.CENTER
+            background = shape(
+                Color.rgb(42, 58, 82), 12
+            )
+            setPadding(
+                dp(12), dp(8), dp(12), dp(8)
+            )
+            isFocusable = true
+            isClickable = true
+            setOnClickListener {
+                openMusicAccessSettings()
+            }
+            setOnFocusChangeListener { view, focused ->
+                view.background = shape(
+                    if (focused)
+                        Color.rgb(65, 106, 158)
+                    else
+                        Color.rgb(42, 58, 82),
+                    12
+                )
+            }
+        }
+
+        val accessRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.END
+            setPadding(0, dp(8), 0, 0)
+        }
+
+        accessRow.addView(accessButton)
+        root.addView(accessRow)
+
+        // FEATURED SECTION
+
         root.addView(
             View(this),
-            LinearLayout.LayoutParams(1, dp(50))
+            LinearLayout.LayoutParams(1, dp(28))
         )
 
         root.addView(
@@ -258,7 +299,7 @@ class MainActivity : Activity() {
 
         root.addView(
             View(this),
-            LinearLayout.LayoutParams(1, dp(48))
+            LinearLayout.LayoutParams(1, dp(35))
         )
 
         root.addView(label("Your Apps", 23f, true))
@@ -271,7 +312,7 @@ class MainActivity : Activity() {
         createAppRow(root)
 
         root.addView(
-            label("AURA TV  •  0.7 DIAGNOSTIC", 11f).apply {
+            label("AURA TV  •  0.8", 11f).apply {
                 alpha = 0.5f
                 setPadding(0, dp(10), 0, 0)
             }
@@ -309,13 +350,15 @@ class MainActivity : Activity() {
         }
 
         for (app in apps) {
-            val name = app.loadLabel(packageManager).toString()
+            val name = app.loadLabel(
+                packageManager
+            ).toString()
 
             val drawable = app.activityInfo
                 .loadBanner(packageManager)
                 ?: app.loadIcon(packageManager)
 
-            // Independent bitmaps prevent disappearing icons.
+            // Separate copies protect tile images.
             val tileBitmap = bitmapFromDrawable(
                 drawable, 320, 180
             )
@@ -395,7 +438,9 @@ class MainActivity : Activity() {
                             app.activityInfo.packageName,
                             app.activityInfo.name
                         )
-                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        addFlags(
+                            Intent.FLAG_ACTIVITY_NEW_TASK
+                        )
                     })
                 } catch (_: Exception) {
                     try {
@@ -431,7 +476,9 @@ class MainActivity : Activity() {
             background = shape(
                 Color.rgb(22, 58, 46), 15
             )
-            setPadding(dp(12), dp(8), dp(12), dp(8))
+            setPadding(
+                dp(12), dp(8), dp(12), dp(8)
+            )
             isFocusable = true
             isClickable = true
             setOnClickListener { openSpotify() }
@@ -467,7 +514,9 @@ class MainActivity : Activity() {
 
         spotifyDetails.addView(
             albumImage,
-            LinearLayout.LayoutParams(dp(46), dp(46))
+            LinearLayout.LayoutParams(
+                dp(46), dp(46)
+            )
         )
 
         val info = LinearLayout(this).apply {
@@ -498,6 +547,42 @@ class MainActivity : Activity() {
 
         spotifyBox.addView(spotifyDetails)
         header.addView(spotifyBox)
+    }
+
+    private fun openMusicAccessSettings() {
+        val actions = listOf(
+            Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS,
+            Settings.ACTION_SETTINGS
+        )
+
+        for (action in actions) {
+            try {
+                startActivity(Intent(action))
+                return
+            } catch (_: Exception) {}
+        }
+
+        spotifyStatus.text = "♫ Settings unavailable"
+    }
+
+    private fun hasMusicAccess(): Boolean {
+        return try {
+            val enabled = Settings.Secure.getString(
+                contentResolver,
+                "enabled_notification_listeners"
+            ).orEmpty()
+
+            enabled.split(":").any {
+                val component = ComponentName
+                    .unflattenFromString(it)
+
+                component?.packageName == packageName &&
+                    component.className ==
+                        AuraNotificationListener::class.java.name
+            }
+        } catch (_: Exception) {
+            false
+        }
     }
 
     private fun openSpotify() {
@@ -536,6 +621,15 @@ class MainActivity : Activity() {
     }
 
     private fun updateSpotify() {
+        val access = hasMusicAccess()
+
+        if (!access) {
+            spotifyStatus.text = "♫ Music access not enabled"
+            spotifyStatus.visibility = View.VISIBLE
+            spotifyDetails.visibility = View.GONE
+            return
+        }
+
         try {
             val manager = getSystemService(
                 MEDIA_SESSION_SERVICE
@@ -549,9 +643,9 @@ class MainActivity : Activity() {
             val sessions = try {
                 manager.getActiveSessions(listener)
             } catch (_: SecurityException) {
-                spotifyStatus.text = "♫ Spotify: Access denied"
+                spotifyStatus.text =
+                    "♫ Access granted • Session blocked"
                 spotifyDetails.visibility = View.GONE
-                spotifyStatus.visibility = View.VISIBLE
                 return
             }
 
@@ -563,10 +657,9 @@ class MainActivity : Activity() {
                 it.playbackState?.state ==
                     PlaybackState.STATE_PLAYING
             } ?: spotifySessions.firstOrNull()
-                ?: AuraNotificationListener.mediaController
+                ?: AuraNotificationListener.controller
 
             val state = session?.playbackState?.state
-
             val metadata = session?.metadata
 
             val title = metadata?.getString(
@@ -587,18 +680,18 @@ class MainActivity : Activity() {
 
             val status = when {
                 !AuraNotificationListener.connected ->
-                    "Listener disconnected"
+                    "Granted • Listener disconnected"
 
                 session == null &&
                     AuraNotificationListener.notificationSeen ->
-                    "Notification only"
+                    "Notification detected"
 
                 session == null ->
-                    "No session"
+                    "Granted • No Spotify session"
 
                 state == PlaybackState.STATE_PLAYING &&
                     title.isBlank() ->
-                    "No title"
+                    "Playing • No title"
 
                 state == PlaybackState.STATE_PLAYING ->
                     "Playing"
@@ -610,11 +703,10 @@ class MainActivity : Activity() {
                     "State unknown"
 
                 else ->
-                    "State $state"
+                    "Playback state $state"
             }
 
-            // Keep diagnostic status visible for this version.
-            spotifyStatus.text = "♫ Spotify: $status"
+            spotifyStatus.text = "♫ $status"
 
             val showDetails =
                 state == PlaybackState.STATE_PLAYING &&
@@ -633,7 +725,7 @@ class MainActivity : Activity() {
 
         } catch (e: Exception) {
             spotifyStatus.text =
-                "♫ Spotify: ${e.javaClass.simpleName}"
+                "♫ Error: ${e.javaClass.simpleName}"
             spotifyDetails.visibility = View.GONE
         }
     }
