@@ -5,13 +5,12 @@ import android.app.Activity
 import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
-import android.graphics.LinearGradient
 import android.graphics.Paint
-import android.graphics.RadialGradient
-import android.graphics.Shader
 import android.graphics.Typeface
+import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.media.MediaMetadata
 import android.media.session.MediaController
@@ -20,83 +19,80 @@ import android.media.session.PlaybackState
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import android.service.notification.NotificationListenerService
 import android.view.Gravity
 import android.view.View
 import android.widget.FrameLayout
 import android.widget.HorizontalScrollView
 import android.widget.ImageView
 import android.widget.LinearLayout
-import android.widget.ScrollView
 import android.widget.TextView
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-class AuraNotificationListener : NotificationListenerService()
+class AuraNotificationListener :
+    android.service.notification.NotificationListenerService()
 
 class MainActivity : Activity() {
 
     private val handler = Handler(Looper.getMainLooper())
     private var controller: MediaController? = null
 
-    private lateinit var musicPanel: LinearLayout
-    private lateinit var songTitle: TextView
-    private lateinit var songArtist: TextView
-    private lateinit var albumArt: ImageView
-    private lateinit var playButton: TextView
-    private lateinit var clockText: TextView
+    private lateinit var backgroundLayer: FrameLayout
+    private lateinit var backgroundArt: ImageView
+    private lateinit var backgroundShade: View
+    private lateinit var clock: TextView
+    private lateinit var spotifyArea: LinearLayout
+    private lateinit var spotifyArtwork: ImageView
+    private lateinit var spotifyTitle: TextView
+    private lateinit var spotifyArtist: TextView
+    private lateinit var spotifyIdle: TextView
+    private lateinit var spotifyPlaying: LinearLayout
+    private lateinit var featuredTitle: TextView
 
-    private fun dp(value: Int): Int {
-        return (value * resources.displayMetrics.density).toInt()
-    }
+    private var lastMusicKey = ""
+    private var currentBackgroundKey = ""
 
-    private fun shape(
+    private fun dp(value: Int): Int =
+        (value * resources.displayMetrics.density).toInt()
+
+    private fun rounded(
         color: Int,
-        radius: Int = 22
-    ): GradientDrawable {
-        return GradientDrawable().apply {
+        radius: Int = 20
+    ): GradientDrawable =
+        GradientDrawable().apply {
             setColor(color)
             cornerRadius = dp(radius).toFloat()
         }
-    }
+
+    private fun gradient(color: Int): GradientDrawable =
+        GradientDrawable(
+            GradientDrawable.Orientation.TL_BR,
+            intArrayOf(
+                darken(color, 0.50f),
+                darken(color, 0.20f),
+                Color.rgb(5, 9, 19)
+            )
+        )
+
+    private fun darken(color: Int, amount: Float): Int =
+        Color.rgb(
+            (Color.red(color) * amount).toInt(),
+            (Color.green(color) * amount).toInt(),
+            (Color.blue(color) * amount).toInt()
+        )
 
     private fun text(
         value: String,
         size: Float,
         bold: Boolean = false
-    ): TextView {
-        return TextView(this).apply {
-            this.text = value
+    ): TextView =
+        TextView(this).apply {
+            text = value
             textSize = size
             setTextColor(Color.WHITE)
             if (bold) typeface = Typeface.DEFAULT_BOLD
         }
-    }
-
-    private fun focusEffect(
-        view: View,
-        normal: Int,
-        focusedColor: Int,
-        radius: Int = 22
-    ) {
-        view.isFocusable = true
-        view.isClickable = true
-        view.background = shape(normal, radius)
-
-        view.setOnFocusChangeListener { v, focused ->
-            v.background = shape(
-                if (focused) focusedColor else normal,
-                radius
-            )
-            v.animate()
-                .scaleX(if (focused) 1.065f else 1f)
-                .scaleY(if (focused) 1.065f else 1f)
-                .setDuration(180)
-                .start()
-            v.elevation = if (focused) dp(12).toFloat() else 0f
-        }
-    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -106,137 +102,123 @@ class MainActivity : Activity() {
     private fun buildHome() {
         val frame = FrameLayout(this)
 
-        frame.addView(
-            CinematicBackground(),
+        backgroundLayer = FrameLayout(this)
+        backgroundLayer.background =
+            gradient(Color.rgb(35, 55, 100))
+
+        backgroundArt = ImageView(this).apply {
+            scaleType = ImageView.ScaleType.CENTER_CROP
+            alpha = 0.14f
+        }
+
+        backgroundLayer.addView(
+            backgroundArt,
             FrameLayout.LayoutParams(-1, -1)
         )
 
-        val scroll = ScrollView(this).apply {
-            isFillViewport = true
-            clipToPadding = false
+        backgroundShade = View(this).apply {
+            background = GradientDrawable(
+                GradientDrawable.Orientation.TOP_BOTTOM,
+                intArrayOf(
+                    Color.argb(155, 2, 5, 14),
+                    Color.argb(115, 3, 7, 18),
+                    Color.argb(240, 3, 7, 17)
+                )
+            )
         }
+
+        backgroundLayer.addView(
+            backgroundShade,
+            FrameLayout.LayoutParams(-1, -1)
+        )
+
+        frame.addView(backgroundLayer)
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(48), dp(26), dp(48), dp(30))
+            setPadding(dp(48), dp(22), dp(48), dp(24))
             clipChildren = false
             clipToPadding = false
         }
 
-        scroll.addView(root)
-        frame.addView(scroll)
+        frame.addView(root)
         setContentView(frame)
 
-        // TOP NAVIGATION
+        // TOP BAR
 
-        val top = LinearLayout(this).apply {
+        val header = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
 
-        val logo = text("AURA", 27f, true)
-        top.addView(
-            logo,
+        header.addView(
+            text("AURA", 26f, true),
             LinearLayout.LayoutParams(0, -2, 1f)
         )
 
-        val spotify = text("♫  Spotify", 14f, true).apply {
-            gravity = Gravity.CENTER
-            setPadding(dp(20), dp(12), dp(20), dp(12))
-            setOnClickListener { openSpotify() }
-        }
+        createSpotifyHeader(header)
 
-        focusEffect(
-            spotify,
-            Color.rgb(22, 53, 43),
-            Color.rgb(29, 135, 82),
-            25
-        )
-
-        top.addView(spotify)
-
-        clockText = text("", 14f, true).apply {
-            setPadding(dp(24), 0, 0, 0)
+        clock = text("", 14f, true).apply {
+            setPadding(dp(22), 0, 0, 0)
         }
         updateClock()
-        top.addView(clockText)
+        header.addView(clock)
 
-        root.addView(top)
+        root.addView(header)
 
-        // MAIN HEADING
+        // FEATURED AREA
 
         root.addView(
             View(this),
-            LinearLayout.LayoutParams(1, dp(55))
+            LinearLayout.LayoutParams(1, dp(54))
         )
 
-        root.addView(text("Welcome home.", 39f, true))
-
-        root.addView(text(
-            "Your favorite entertainment, all in one place.",
-            16f
-        ).apply {
+        root.addView(text("YOUR ENTERTAINMENT", 12f, true).apply {
             alpha = 0.7f
-            setPadding(0, dp(9), 0, 0)
         })
 
-        // SPOTIFY NOW PLAYING
-
-        createMusicPanel(root)
-
-        // APP SECTION
-
-        root.addView(
-            View(this),
-            LinearLayout.LayoutParams(1, dp(42))
-        )
-
-        val appsHeader = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
+        featuredTitle = text("Welcome to Aura.", 39f, true).apply {
+            maxLines = 2
+            setPadding(0, dp(12), 0, 0)
         }
 
-        appsHeader.addView(
-            text("Your Apps", 23f, true),
-            LinearLayout.LayoutParams(0, -2, 1f)
-        )
+        root.addView(featuredTitle)
 
-        appsHeader.addView(
-            text("Explore  •  Select to open", 12f).apply {
-                alpha = 0.65f
-            }
-        )
-
-        root.addView(appsHeader)
+        root.addView(text(
+            "Choose an app and enjoy.",
+            16f
+        ).apply {
+            alpha = 0.72f
+            setPadding(0, dp(10), 0, 0)
+        })
 
         root.addView(
             View(this),
-            LinearLayout.LayoutParams(1, dp(16))
+            LinearLayout.LayoutParams(1, dp(60))
         )
 
-        createAppDock(root)
+        // APP DOCK
 
-        root.addView(text(
-            "AURA TV 0.4   •   MADE FOR YOUR TV",
-            11f
-        ).apply {
-            alpha = 0.45f
-            setPadding(0, dp(35), 0, 0)
-        })
-    }
+        root.addView(text("Your Apps", 23f, true))
 
-    private fun createAppDock(root: LinearLayout) {
+        root.addView(
+            View(this),
+            LinearLayout.LayoutParams(1, dp(12))
+        )
+
         val scroller = HorizontalScrollView(this).apply {
             isHorizontalScrollBarEnabled = false
             clipToPadding = false
             clipChildren = false
+            descendantFocusability =
+                android.view.ViewGroup.FOCUS_AFTER_DESCENDANTS
         }
 
         val row = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             clipChildren = false
             clipToPadding = false
-            setPadding(dp(10), dp(12), dp(10), dp(15))
+            setPadding(dp(10), dp(14), dp(10), dp(18))
         }
 
         val query = Intent(Intent.ACTION_MAIN).apply {
@@ -256,64 +238,68 @@ class MainActivity : Activity() {
 
         for (app in apps) {
             val name = app.loadLabel(packageManager).toString()
+            val artwork = app.activityInfo.loadBanner(packageManager)
+                ?: app.loadIcon(packageManager)
 
             val tile = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
                 gravity = Gravity.CENTER
-                setPadding(dp(15), dp(17), dp(15), dp(12))
+                setPadding(dp(8), dp(8), dp(8), dp(8))
+                background = rounded(
+                    Color.argb(105, 35, 46, 65),
+                    22
+                )
+                isFocusable = true
+                isClickable = true
             }
 
-            focusEffect(
-                tile,
-                Color.rgb(29, 39, 58),
-                Color.rgb(67, 91, 137),
-                24
-            )
-
-            val banner = app.activityInfo.loadBanner(packageManager)
-
-            if (banner != null) {
-                val bannerImage = ImageView(this).apply {
-                    setImageDrawable(banner)
-                    scaleType = ImageView.ScaleType.FIT_CENTER
-                }
-
-                tile.addView(
-                    bannerImage,
-                    LinearLayout.LayoutParams(
-                        dp(176),
-                        dp(100)
-                    )
-                )
-            } else {
-                val icon = ImageView(this).apply {
-                    setImageDrawable(
-                        app.loadIcon(packageManager)
-                    )
-                    scaleType = ImageView.ScaleType.FIT_CENTER
-                }
-
-                tile.addView(
-                    icon,
-                    LinearLayout.LayoutParams(
-                        dp(100),
-                        dp(100)
-                    )
-                )
-            }
-
-            val appLabel = text(name, 14f, true).apply {
-                gravity = Gravity.CENTER
-                maxLines = 1
-                ellipsize =
-                    android.text.TextUtils.TruncateAt.END
-                setPadding(dp(4), dp(15), dp(4), 0)
+            val image = ImageView(this).apply {
+                setImageDrawable(artwork)
+                scaleType = ImageView.ScaleType.FIT_CENTER
             }
 
             tile.addView(
-                appLabel,
+                image,
+                LinearLayout.LayoutParams(
+                    dp(164),
+                    dp(93)
+                )
+            )
+
+            tile.addView(
+                text(name, 13f, true).apply {
+                    gravity = Gravity.CENTER
+                    maxLines = 1
+                    ellipsize =
+                        android.text.TextUtils.TruncateAt.END
+                    setPadding(dp(4), dp(10), dp(4), 0)
+                },
                 LinearLayout.LayoutParams(-1, -2)
             )
+
+            tile.setOnFocusChangeListener { view, focused ->
+                view.background = rounded(
+                    if (focused)
+                        Color.argb(220, 85, 107, 145)
+                    else
+                        Color.argb(105, 35, 46, 65),
+                    22
+                )
+
+                view.animate()
+                    .scaleX(if (focused) 1.075f else 1f)
+                    .scaleY(if (focused) 1.075f else 1f)
+                    .setDuration(180)
+                    .start()
+
+                if (focused) {
+                    featuredTitle.text = name
+                    changeBackground(
+                        app.activityInfo.packageName,
+                        artwork
+                    )
+                }
+            }
 
             tile.setOnClickListener {
                 try {
@@ -336,120 +322,165 @@ class MainActivity : Activity() {
             row.addView(
                 tile,
                 LinearLayout.LayoutParams(
-                    dp(215),
-                    dp(176)
+                    dp(188),
+                    dp(151)
                 ).apply {
-                    rightMargin = dp(18)
+                    rightMargin = dp(12)
                 }
             )
         }
 
         scroller.addView(row)
         root.addView(scroller)
+
+        root.addView(text("AURA TV  •  0.5", 11f).apply {
+            alpha = 0.45f
+            setPadding(0, dp(14), 0, 0)
+        })
+
+        if (row.childCount > 0) {
+            row.getChildAt(0).requestFocus()
+        }
     }
 
-    private fun createMusicPanel(root: LinearLayout) {
-        musicPanel = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            visibility = View.GONE
-            setPadding(dp(20), dp(16), dp(20), dp(16))
-            background = shape(Color.rgb(20, 45, 46), 24)
-        }
-
-        val params = LinearLayout.LayoutParams(-1, -2)
-        params.topMargin = dp(24)
-
-        root.addView(musicPanel, params)
-
-        musicPanel.addView(
-            text("♫  NOW PLAYING ON SPOTIFY", 12f, true)
-        )
-
-        val row = LinearLayout(this).apply {
+    private fun createSpotifyHeader(header: LinearLayout) {
+        spotifyArea = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(0, dp(12), 0, 0)
+            setPadding(dp(10), dp(7), dp(12), dp(7))
+            isFocusable = true
+            isClickable = true
+            background = rounded(
+                Color.argb(160, 19, 54, 43),
+                17
+            )
+            setOnClickListener { openSpotify() }
         }
 
-        albumArt = ImageView(this).apply {
+        spotifyArea.setOnFocusChangeListener { view, focused ->
+            view.background = rounded(
+                if (focused)
+                    Color.rgb(32, 135, 83)
+                else
+                    Color.argb(160, 19, 54, 43),
+                17
+            )
+        }
+
+        spotifyIdle = text("♫  Spotify", 14f, true)
+        spotifyArea.addView(spotifyIdle)
+
+        spotifyPlaying = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            visibility = View.GONE
+        }
+
+        spotifyArtwork = ImageView(this).apply {
             scaleType = ImageView.ScaleType.CENTER_CROP
-            background = shape(Color.rgb(42, 71, 69), 12)
+            background = rounded(Color.rgb(33, 70, 57), 7)
         }
 
-        row.addView(
-            albumArt,
-            LinearLayout.LayoutParams(dp(72), dp(72))
+        spotifyPlaying.addView(
+            spotifyArtwork,
+            LinearLayout.LayoutParams(dp(43), dp(43))
         )
 
-        val info = LinearLayout(this).apply {
+        val songInfo = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(18), 0, dp(12), 0)
+            setPadding(dp(10), 0, 0, 0)
         }
 
-        songTitle = text("Spotify", 21f, true).apply {
+        spotifyTitle = text("Spotify", 14f, true).apply {
             maxLines = 1
+            ellipsize =
+                android.text.TextUtils.TruncateAt.END
         }
 
-        songArtist = text("Now playing", 14f).apply {
-            alpha = 0.7f
+        spotifyArtist = text("", 12f).apply {
+            alpha = 0.75f
             maxLines = 1
+            ellipsize =
+                android.text.TextUtils.TruncateAt.END
         }
 
-        info.addView(songTitle)
-        info.addView(songArtist)
+        songInfo.addView(spotifyTitle)
+        songInfo.addView(spotifyArtist)
 
-        row.addView(
-            info,
-            LinearLayout.LayoutParams(0, -2, 1f)
+        spotifyPlaying.addView(
+            songInfo,
+            LinearLayout.LayoutParams(dp(145), -2)
         )
 
-        row.addView(musicControl("❮❮") {
-            controller?.transportControls?.skipToPrevious()
-        })
-
-        playButton = musicControl("Ⅱ") {
-            val state = controller?.playbackState?.state
-            if (state == PlaybackState.STATE_PLAYING) {
-                controller?.transportControls?.pause()
-            } else {
-                controller?.transportControls?.play()
-            }
-            handler.postDelayed({ updateMusic() }, 350)
-        }
-        row.addView(playButton)
-
-        row.addView(musicControl("❯❯") {
-            controller?.transportControls?.skipToNext()
-        })
-
-        musicPanel.addView(row)
+        spotifyArea.addView(spotifyPlaying)
+        header.addView(spotifyArea)
     }
 
-    private fun musicControl(
-        symbol: String,
-        action: () -> Unit
-    ): TextView {
-        val button = text(symbol, 18f, true).apply {
-            gravity = Gravity.CENTER
-            setOnClickListener { action() }
-        }
+    private fun changeBackground(
+        key: String,
+        drawable: Drawable
+    ) {
+        if (currentBackgroundKey == key) return
+        currentBackgroundKey = key
 
-        focusEffect(
-            button,
-            Color.rgb(35, 69, 68),
-            Color.rgb(40, 139, 93),
-            14
+        val color = extractColor(drawable)
+
+        backgroundLayer.background = gradient(color)
+
+        backgroundArt.animate().cancel()
+        backgroundArt.alpha = 0f
+        backgroundArt.setImageDrawable(
+            drawable.constantState?.newDrawable()?.mutate()
+                ?: drawable
         )
+        backgroundArt.animate()
+            .alpha(0.18f)
+            .setDuration(350)
+            .start()
+    }
 
-        button.layoutParams =
-            LinearLayout.LayoutParams(
-                dp(52),
-                dp(52)
-            ).apply {
-                leftMargin = dp(8)
+    private fun extractColor(drawable: Drawable): Int {
+        return try {
+            val bitmap = Bitmap.createBitmap(
+                24, 24, Bitmap.Config.ARGB_8888
+            )
+            val canvas = Canvas(bitmap)
+            val oldBounds = drawable.bounds
+            drawable.setBounds(0, 0, 24, 24)
+            drawable.draw(canvas)
+            drawable.bounds = oldBounds
+
+            var red = 0L
+            var green = 0L
+            var blue = 0L
+            var count = 0L
+
+            for (y in 0 until 24 step 2) {
+                for (x in 0 until 24 step 2) {
+                    val pixel = bitmap.getPixel(x, y)
+                    if (Color.alpha(pixel) > 80) {
+                        red += Color.red(pixel)
+                        green += Color.green(pixel)
+                        blue += Color.blue(pixel)
+                        count++
+                    }
+                }
             }
 
-        return button
+            bitmap.recycle()
+
+            if (count == 0L) {
+                Color.rgb(45, 65, 105)
+            } else {
+                Color.rgb(
+                    ((red / count).toInt() + 35).coerceAtMost(255),
+                    ((green / count).toInt() + 35).coerceAtMost(255),
+                    ((blue / count).toInt() + 35).coerceAtMost(255)
+                )
+            }
+        } catch (_: Exception) {
+            Color.rgb(45, 65, 105)
+        }
     }
 
     private fun openSpotify() {
@@ -491,7 +522,7 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun updateMusic() {
+    private fun updateSpotify() {
         try {
             val manager = getSystemService(
                 MEDIA_SESSION_SERVICE
@@ -511,42 +542,54 @@ class MainActivity : Activity() {
                 )
             }
 
-            val state = controller?.playbackState?.state
+            val playing = controller?.playbackState?.state ==
+                PlaybackState.STATE_PLAYING
 
-            val playing =
-                state == PlaybackState.STATE_PLAYING
+            spotifyIdle.visibility =
+                if (playing) View.GONE else View.VISIBLE
 
-            musicPanel.visibility =
+            spotifyPlaying.visibility =
                 if (playing) View.VISIBLE else View.GONE
 
             if (playing) {
                 val metadata = controller?.metadata
 
-                songTitle.text = metadata?.getString(
+                val title = metadata?.getString(
                     MediaMetadata.METADATA_KEY_TITLE
                 ) ?: "Spotify"
 
-                songArtist.text = metadata?.getString(
+                val artist = metadata?.getString(
                     MediaMetadata.METADATA_KEY_ARTIST
                 ) ?: "Now playing"
 
-                val art = metadata?.getBitmap(
-                    MediaMetadata.METADATA_KEY_ALBUM_ART
-                ) ?: metadata?.getBitmap(
-                    MediaMetadata.METADATA_KEY_ART
-                )
+                val key = "$title|$artist"
 
-                albumArt.setImageBitmap(art)
-                playButton.text = "Ⅱ"
+                if (key != lastMusicKey) {
+                    lastMusicKey = key
+
+                    spotifyTitle.text = title
+                    spotifyArtist.text = artist
+
+                    val artwork = metadata?.getBitmap(
+                        MediaMetadata.METADATA_KEY_ALBUM_ART
+                    ) ?: metadata?.getBitmap(
+                        MediaMetadata.METADATA_KEY_ART
+                    )
+
+                    spotifyArtwork.setImageBitmap(artwork)
+                }
+            } else {
+                lastMusicKey = ""
             }
         } catch (_: Exception) {
             controller = null
-            musicPanel.visibility = View.GONE
+            spotifyIdle.visibility = View.VISIBLE
+            spotifyPlaying.visibility = View.GONE
         }
     }
 
     private fun updateClock() {
-        clockText.text = SimpleDateFormat(
+        clock.text = SimpleDateFormat(
             "EEE, MMM d  •  h:mm a",
             Locale.getDefault()
         ).format(Date())
@@ -554,8 +597,8 @@ class MainActivity : Activity() {
 
     private val updater = object : Runnable {
         override fun run() {
-            updateMusic()
             updateClock()
+            updateSpotify()
             handler.postDelayed(this, 2000)
         }
     }
@@ -571,58 +614,8 @@ class MainActivity : Activity() {
         super.onPause()
     }
 
-    inner class CinematicBackground :
-        View(this@MainActivity) {
-
-        private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
-
-        override fun onDraw(canvas: Canvas) {
-            super.onDraw(canvas)
-
-            val w = width.toFloat()
-            val h = height.toFloat()
-
-            paint.shader = LinearGradient(
-                0f, 0f, w, h,
-                intArrayOf(
-                    Color.rgb(8, 13, 26),
-                    Color.rgb(15, 29, 49),
-                    Color.rgb(7, 13, 25)
-                ),
-                null,
-                Shader.TileMode.CLAMP
-            )
-
-            canvas.drawRect(0f, 0f, w, h, paint)
-
-            paint.shader = RadialGradient(
-                w * 0.80f,
-                h * 0.25f,
-                w * 0.65f,
-                intArrayOf(
-                    Color.argb(130, 40, 81, 133),
-                    Color.TRANSPARENT
-                ),
-                null,
-                Shader.TileMode.CLAMP
-            )
-
-            canvas.drawRect(0f, 0f, w, h, paint)
-
-            paint.shader = RadialGradient(
-                w * 0.18f,
-                h * 0.90f,
-                w * 0.55f,
-                intArrayOf(
-                    Color.argb(85, 41, 91, 91),
-                    Color.TRANSPARENT
-                ),
-                null,
-                Shader.TileMode.CLAMP
-            )
-
-            canvas.drawRect(0f, 0f, w, h, paint)
-            paint.shader = null
-        }
+    override fun onDestroy() {
+        handler.removeCallbacks(updater)
+        super.onDestroy()
     }
 }
